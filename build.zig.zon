@@ -1,7 +1,7 @@
 .{
     .name = "lucie",
     .version = "0.1.0",
-    .dependencies = .{},
+    .dependencies = .{}, // No external dependencies due to download issues
     .paths = .{
         "build.zig",
         "build.zig.zon",

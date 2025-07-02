@@ -12,6 +12,18 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    // Add the generated OpenGL bindings as a module
+    const gl_module = b.addModule("gl", .{
+        .source_file = .{ .path = "src/graphics/opengl/gl.zig" },
+    });
+    lib.addModule("gl", gl_module);
+
+    // Miniaudio dependency removed due to download issues.
+    // Will use a placeholder audio engine for now.
+
+    // GLFW dependency removed due to download issues.
+    // Will use a placeholder Window interface for now.
+
     b.installArtifact(lib);
 
     const main_tests = b.addTest(.{

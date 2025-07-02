@@ -2,9 +2,10 @@
 // OpenGL specific renderer implementation.
 
 const std = @import("std");
-const gl = @import("zopengl"); // Assuming zopengl or a similar binding is used
+const gl = @import("gl"); // Use the generated OpenGL bindings
 const Color = @import("../color.zig").Color;
 const Mat4 = @import("../../math/mat4.zig").Mat4;
+const Window = @import("../../platform/window.zig").Window; // Import the placeholder Window
 
 // Handles for OpenGL objects
 pub const GLShaderHandle = u32;
@@ -24,37 +25,65 @@ pub const GLRenderer = struct {
     // Current state (simplified)
     current_shader: GLShaderHandle = 0,
     // current_vao: GLVaoHandle = 0,
+    gl_loaded: bool = false,
 
-    pub fn init(allocator: std.mem.Allocator /*, window: ?*anyopaque */) !GLRenderer {
+    pub fn init(allocator: std.mem.Allocator, window: *const Window) !GLRenderer {
         std.log.info("Initializing OpenGL Renderer...", .{});
 
-        // This is where OpenGL context would be loaded (e.g., using glad, ZGL, etc.)
-        // For zopengl, it's often `try gl.loadGlobalLoader();` or similar after context creation.
-        // This step is highly dependent on the windowing library and GL loading library.
-        // For now, we'll assume it's done externally or via a helper.
+        // Load OpenGL function pointers using the window's getProcAddress
+        // The generated gl.zig from zig-opengl typically has a `load` function
+        // that takes a context (can often be null or a dummy value if getProcAddress is global)
+        // and the getProcAddress function itself.
+        // Example: try gl.load(null, window.getProcAddress);
+        // The exact signature of gl.load might vary based on the generator version.
+        // Let's assume it's: gl.load(user_context: anytype, loader_function: fn(@TypeOf(user_context), [:0]const u8) ?*anyopaque)
 
-        // Example: Querying GL version (if context is active)
-        // var major: i32 = 0;
-        // var minor: i32 = 0;
-        // gl.getIntegerv(gl.MAJOR_VERSION, &major);
-        // gl.getIntegerv(gl.MINOR_VERSION, &minor);
-        // std.log.info("OpenGL Version: {d}.{d}", .{major, minor});
+        var gl_is_loaded = false;
+        if (window.getProcAddress(window, "glClear") != null) { // Basic check if getProcAddress is not always null
+            // The context for gl.load is often optional or can be the window itself.
+            // For zig-opengl generated file, it's often (load_ctx: anytype, get_proc_address: fn(@TypeOf(load_ctx), [:0]const u8) ?*FunctionPointer)
+            // So we pass the window as context for its getProcAddress.
+            gl.load(window, window.getProcAddressFn) catch |err| {
+                 std.log.warn("OpenGL function loading failed. GLRenderer will operate in no-op mode. Error: {any}", .{err});
+                 // Proceeding without GL functions, they will be no-ops or error out if called.
+            } else {
+                std.log.info("OpenGL functions loaded successfully via window.getProcAddress.", .{});
+                gl_is_loaded = true;
+            };
+        } else {
+            std.log.warn("window.getProcAddress seems to be a null provider. OpenGL functions will not be loaded.", .{});
+        }
 
-        // gl.getIntegerv(gl.MAX_TEXTURE_IMAGE_UNITS, &self.max_texture_units);
-        // std.log.info("Max texture units: {d}", .{self.max_texture_units});
 
-        // Set initial GL state
-        // gl.enable(gl.DEPTH_TEST);
-        // gl.enable(gl.CULL_FACE);
-        // gl.enable(gl.BLEND);
-        // gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
-
-        return GLRenderer{
+        var renderer = GLRenderer{
             .allocator = allocator,
-            // .window_handle = window,
-            // .gl_version_major = major,
-            // .gl_version_minor = minor,
+            .gl_loaded = gl_is_loaded,
         };
+
+        if (renderer.gl_loaded) {
+            // Example: Querying GL version (if context is active and functions loaded)
+            var major: i32 = 0;
+            var minor: i32 = 0;
+            gl.getIntegerv(gl.MAJOR_VERSION, &major);
+            gl.getIntegerv(gl.MINOR_VERSION, &minor);
+            renderer.gl_version_major = major;
+            renderer.gl_version_minor = minor;
+            std.log.info("OpenGL Version: {d}.{d}", .{major, minor});
+
+            // gl.getIntegerv(gl.MAX_TEXTURE_IMAGE_UNITS, &renderer.max_texture_units);
+            // std.log.info("Max texture units: {d}", .{renderer.max_texture_units});
+
+            // Set initial GL state
+            gl.enable(gl.DEPTH_TEST);
+            gl.enable(gl.CULL_FACE);
+            gl.enable(gl.BLEND);
+            gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+            std.log.info("Default OpenGL states set.", .{});
+        } else {
+            std.log.warn("OpenGL not loaded. Renderer will be in a no-op state.", .{});
+        }
+
+        return renderer;
     }
 
     pub fn deinit(self: *GLRenderer) void {
@@ -65,23 +94,32 @@ pub const GLRenderer = struct {
     }
 
     pub fn beginFrame(self: *GLRenderer, clear_color: Color) void {
-        _ = self;
-        // gl.clearColor(clear_color.r, clear_color.g, clear_color.b, clear_color.a);
-        // gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-        std.log.debug("GLRenderer.beginFrame (clear: {any})", .{clear_color});
+        if (!self.gl_loaded) {
+            std.log.debug("GLRenderer.beginFrame (no-op, GL not loaded)", .{});
+            return;
+        }
+        gl.clearColor(clear_color.r, clear_color.g, clear_color.b, clear_color.a);
+        gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+        // std.log.debug("GLRenderer.beginFrame (clear: {any})", .{clear_color});
     }
 
     pub fn endFrame(self: *GLRenderer) void {
+        if (!self.gl_loaded) {
+            std.log.debug("GLRenderer.endFrame (no-op, GL not loaded)", .{});
+            return;
+        }
+        // Buffer swapping is handled by the windowing system, not directly by renderer.
+        // std.log.debug("GLRenderer.endFrame (swap buffers would occur via window system)", .{});
         _ = self;
-        // This is where buffer swapping would happen, usually via windowing library
-        // e.g., glfwSwapBuffers(self.window_handle);
-        std.log.debug("GLRenderer.endFrame (swap buffers)", .{});
     }
 
     pub fn setViewport(self: *GLRenderer, x: i32, y: i32, width: u32, height: u32) void {
-        _ = self;
-        // gl.viewport(x, y, @intCast(i32, width), @intCast(i32, height));
-        std.log.debug("GLRenderer.setViewport ({d},{d}, {d}x{d})", .{x,y,width,height});
+        if (!self.gl_loaded) {
+            std.log.debug("GLRenderer.setViewport (no-op, GL not loaded)", .{});
+            return;
+        }
+        gl.viewport(x, y, @intCast(i32, width), @intCast(i32, height));
+        // std.log.debug("GLRenderer.setViewport ({d},{d}, {d}x{d})", .{x,y,width,height});
     }
 
     // More specific OpenGL drawing commands would go here
@@ -104,42 +142,19 @@ pub const GLRenderer = struct {
     // pub fn drawElements(...)
 };
 
-// Mock zopengl for testing if not available or for CI
-// In a real project, zopengl would be a dependency in build.zig.zon
-// For this placeholder, we define minimal symbols used if any.
-// If `gl` variable is used directly, we need to provide it.
-// For now, the GL calls are commented out, so we don't strictly need this mock.
-// const gl = struct {
-//     const GLenum = u32;
-//     const GLuint = u32;
-//     const GLint = i32;
-//     const GLsizei = i32;
-//     const GLfloat = f32;
-
-//     pub const MAJOR_VERSION: GLenum = 0x821B;
-//     pub const MINOR_VERSION: GLenum = 0x821C;
-//     pub const MAX_TEXTURE_IMAGE_UNITS: GLenum = 0x8871;
-//     pub const DEPTH_TEST: GLenum = 0x0B71;
-//     // ... other constants
-
-//     pub fn getIntegerv(pname: GLenum, params: *GLint) void { _ = pname; _ = params; }
-//     pub fn enable(cap: GLenum) void { _ = cap; }
-//     pub fn clearColor(red: GLfloat, green: GLfloat, blue: GLfloat, alpha: GLfloat) void { _=red;_ =green;_=blue;_=alpha;}
-//     pub fn clear(mask: GLenum) void { _ = mask; }
-//     pub fn viewport(x: GLint, y: GLint, width: GLsizei, height: GLsizei) void { _=x;_=y;_=width;_=height;}
-//     // ... other functions
-// };
-
-
-test "GLRenderer placeholder initialization" {
-    // This test is minimal because GL functions require an active context.
-    // Full testing would need a windowing library (like GLFW) to create a context,
-    // or an offscreen rendering setup (like OSMesa).
+test "GLRenderer placeholder initialization with placeholder window" {
+    // This test uses the placeholder AppWindow.
+    // Since AppWindow.getProcAddress returns null, GL functions won't actually load.
+    // This tests the renderer's behavior in such a scenario.
     const allocator = std.testing.allocator;
-    var renderer = try GLRenderer.init(allocator);
+    var window = try Window.createAppWindow(allocator, "Test GLRenderer Window", 100, 100);
+    defer window.destroy();
+
+    var renderer = try GLRenderer.init(allocator, &window);
     defer renderer.deinit();
 
     // Check default values or simple non-GL state
+    try std.testing.expect(!renderer.gl_loaded); // Expect GL to not be loaded with placeholder
     try std.testing.expect(renderer.allocator == allocator);
 
     // Simulate frame lifecycle calls
@@ -150,22 +165,14 @@ test "GLRenderer placeholder initialization" {
     std.log.info("GLRenderer test completed (no actual GL calls invoked).", .{});
 }
 
-// Note on zopengl:
-// To use zopengl (or any other GL binding), you would add it to `build.zig.zon`
-// and then in `build.zig`, link against it and make its module available.
-// Example for zopengl:
-// In build.zig.zon:
-// .dependencies = .{
-//     .zopengl = .{
-//         .url = "https://github.com/ziglibs/zopengl/archive/refs/heads/main.tar.gz",
-//         .hash = "...", // Get the correct hash
-//     },
-// },
-// In build.zig:
-// const zopengl_dep = b.dependency("zopengl", .{});
-// const zopengl_module = zopengl_dep.module("zopengl");
-// lib.addModule("zopengl", zopengl_module); // (to your library/executable)
-// And then in your Zig code: const gl = @import("zopengl");
-// You also need to load the GL functions, e.g. with `gl.loadGlobalWrapper(glfwGetProcAddress)`
-// if using GLFW, or similar for other window/context creation libraries.
-// This placeholder does not attempt to do full GL setup.
+// Note on OpenGL bindings:
+// The `gl.zig` file was generated by `zig-opengl` and provides the bindings.
+// It's added as a module named "gl" in `build.zig`.
+// To use these bindings, an OpenGL context must be created (usually by a windowing library
+// like GLFW or SDL), and then the OpenGL function pointers must be loaded.
+// The generated `gl.zig` typically includes a `load` function for this purpose,
+// which needs a function like `glfwGetProcAddress` to be passed to it.
+// Example:
+// var window = try Window.create(...); // Assuming a windowing library
+// try gl.load(window.context, window.getProcAddress); // Simplified example
+// After this, OpenGL functions from the `gl` module can be called.
