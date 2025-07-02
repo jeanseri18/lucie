@@ -90,23 +90,96 @@ pub const Application = struct {
     }
 
     // Placeholder for rendering
-    pub fn render(self: *Application) !void {
+    pub fn render(self: *Application, renderer: *const anyopaque, window: *const anyopaque) !void {
         if (!self.isRunning()) return;
+        _ = renderer; // Placeholder
+        _ = window; // Placeholder
 
-        // TODO: Tell the engine to render
-        // try self.engine.render();
+        // TODO: Tell the engine to render (which would use the renderer)
+        // try self.engine.render(renderer);
 
-        // TODO: Swap window buffers
-        // swapWindowBuffers(self.window);
+        // TODO: Swap window buffers (now done in run loop)
+        // window.swapBuffers();
     }
 
-    // Example main loop structure (could be part of a run method)
-    // pub fn run(self: *Application) !void {
-    //     while (self.isRunning()) {
-    //         try self.update();
-    //         try self.render();
-    //     }
-    // }
+    pub fn run(self: *Application) !void {
+        std.log.info("Application run loop starting...", .{});
+
+        // Create placeholder window
+        var window = try @import("../platform/window.zig").Window.createAppWindow(
+            self.allocator,
+            "Lucie Engine Placeholder",
+            800,
+            600,
+        );
+        // Modify max_poll_count for a shorter test run if desired
+        // @ptrCast(*@import("../platform/window.zig").AppWindow, @alignCast(@alignOf(@import("../platform/window.zig").AppWindow), window.ptr)).max_poll_count_before_close = 300;
+
+        defer window.destroy();
+
+        // Initialize renderer
+        var renderer = try @import("../graphics/opengl/gl_renderer.zig").GLRenderer.init(
+            self.allocator,
+            &window,
+        );
+        defer renderer.deinit();
+
+        // Main loop
+        while (!window.shouldClose() and self.isRunning()) { // Check both app state and window state
+            // Poll events
+            window.pollEvents();
+
+            // Application-level update (game logic, physics, etc.)
+            // try self.update(); // For now, update doesn't do much
+
+            // Rendering
+            const clear_color = @import("../graphics/color.zig").Color.CornflowerBlue;
+            renderer.beginFrame(clear_color);
+
+            const window_size = window.getSize();
+            renderer.setViewport(0, 0, window_size.width, window_size.height);
+
+            // try self.engine.render(&renderer); // If engine handles drawing calls
+            // For now, direct render calls or placeholders would go here.
+
+            // Conceptual triangle drawing (placeholders)
+            // This would normally be done once, or if mesh data changes.
+            // For this test, we might do it every frame or just once.
+            // Let's do it once for simplicity.
+            if (self.engine.triangle_mesh == 0) { // Assuming Engine stores handles, 0 for uninit
+                 const vertices = [_]@import("../graphics/vertex.zig").VertexPC{
+                    .{ .position = .{ .x = -0.5, .y = -0.5, .z = 0.0 }, .color = .{ .x = 1, .y = 0, .z = 0, .w = 1 } },
+                    .{ .position = .{ .x =  0.5, .y = -0.5, .z = 0.0 }, .color = .{ .x = 0, .y = 1, .z = 0, .w = 1 } },
+                    .{ .position = .{ .x =  0.0, .y =  0.5, .z = 0.0 }, .color = .{ .x = 0, .y = 0, .z = 1, .w = 1 } },
+                };
+                const indices = [_]u32{ 0, 1, 2 };
+                self.engine.triangle_mesh = renderer.createMesh(&vertices, &indices) catch |err| {
+                    std.log.err("Failed to create triangle mesh (placeholder): {any}", .{err});
+                    0 // error case
+                };
+                if (self.engine.triangle_shader == null) {
+                    self.engine.triangle_shader = @import("../graphics/shader.zig").Shader.createFromFile(
+                        self.allocator, "shaders/simple.vert", "shaders/simple.frag"
+                    ) catch |err| {
+                         std.log.err("Failed to create triangle shader (placeholder): {any}", .{err});
+                         null
+                    };
+                }
+            }
+
+            if (self.engine.triangle_mesh != 0 and self.engine.triangle_shader != null) {
+                self.engine.triangle_shader.?.use(); // Use the shader
+                // TODO: Set uniforms on shader (e.g., model, view, projection matrices)
+                renderer.drawMesh(self.engine.triangle_mesh, self.engine.triangle_shader.?);
+            }
+
+            renderer.endFrame();
+
+            // Swap buffers
+            window.swapBuffers();
+        }
+        std.log.info("Application run loop finished.", .{});
+    }
 };
 
 test "application initialization and deinitialization" {

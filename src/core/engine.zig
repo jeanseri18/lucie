@@ -8,6 +8,11 @@ pub const Engine = struct {
     // Engine specific fields
     allocator: std.mem.Allocator,
 
+    // Placeholder for triangle rendering demo
+    triangle_mesh: @import("../graphics/opengl/gl_renderer.zig").GLMeshHandle = 0,
+    triangle_shader: ?@import("../graphics/shader.zig").Shader = null,
+
+
     // TODO: Add other engine components like renderer, physics world, audio engine, etc.
 
     pub fn init(allocator: std.mem.Allocator) !Engine {
@@ -21,6 +26,13 @@ pub const Engine = struct {
     pub fn deinit(self: *Engine) void {
         std.log.info("Deinitializing Lucie Engine...", .{});
         // TODO: Deinitialize all subsystems
+        if (self.triangle_shader) |*shader| {
+            shader.destroy();
+            self.triangle_shader = null;
+        }
+        // Note: triangle_mesh cleanup would be handled by the renderer that owns it.
+        // If the renderer is part of Engine, Engine.deinit would call renderer.deinit(),
+        // which would then clean up all meshes including triangle_mesh.
     }
 
     pub fn run(self: *Engine) !void {

@@ -6,15 +6,19 @@ const gl = @import("gl"); // Use the generated OpenGL bindings
 const Color = @import("../color.zig").Color;
 const Mat4 = @import("../../math/mat4.zig").Mat4;
 const Window = @import("../../platform/window.zig").Window; // Import the placeholder Window
+const Vertex = @import("../vertex.zig").VertexPC; // Using VertexPC for simplicity
+const Shader = @import("../shader.zig").Shader; // Import placeholder Shader
 
 // Handles for OpenGL objects
 pub const GLShaderHandle = u32;
 pub const GLTextureHandle = u32;
 pub const GLBufferHandle = u32; // For VBO, EBO
 pub const GLVaoHandle = u32;
+pub const GLMeshHandle = u32; // Placeholder for mesh/VAO resource
 
 pub const GLRenderer = struct {
     allocator: std.mem.Allocator,
+    next_mesh_handle: GLMeshHandle = 1, // Simple handle generation
     // window_handle: ?*anyopaque = null, // e.g. GLFWwindow pointer
 
     // Stats or capabilities
@@ -139,7 +143,63 @@ pub const GLRenderer = struct {
     // pub fn createIndexBuffer(...) !GLBufferHandle
     // pub fn createVertexArrayObject(...) !GLVaoHandle
     // pub fn bindVao(...)
-    // pub fn drawElements(...)
+
+    // Placeholder Mesh functions
+    pub fn createMesh(
+        self: *GLRenderer,
+        vertices: []const Vertex,
+        indices: []const u32
+    ) !GLMeshHandle {
+        if (!self.gl_loaded) {
+            std.log.debug("GLRenderer.createMesh (no-op, GL not loaded)", .{});
+            // Still return a dummy handle so app logic doesn't break
+            const handle = self.next_mesh_handle;
+            self.next_mesh_handle +=1;
+            return handle;
+        }
+        std.log.info("GLRenderer: Creating mesh (placeholder) - Vertices: {d}, Indices: {d}", .{ vertices.len, indices.len });
+        // TODO: Actual OpenGL mesh creation:
+        // 1. gl.genVertexArrays(1, &vao)
+        // 2. gl.bindVertexArray(vao)
+        // 3. gl.genBuffers(1, &vbo)
+        // 4. gl.bindBuffer(gl.ARRAY_BUFFER, vbo)
+        // 5. gl.bufferData(gl.ARRAY_BUFFER, vertices_data, gl.STATIC_DRAW)
+        // 6. gl.genBuffers(1, &ebo)
+        // 7. gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ebo)
+        // 8. gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, indices_data, gl.STATIC_DRAW)
+        // 9. Setup vertex attributes (glVertexAttribPointer, glEnableVertexAttribArray) based on Vertex struct
+        // 10. gl.bindVertexArray(0) // Unbind VAO
+        // Store VBO, EBO, VAO, index_count in a struct associated with the returned handle.
+        const handle = self.next_mesh_handle;
+        self.next_mesh_handle +=1;
+        return handle;
+    }
+
+    pub fn drawMesh(self: *const GLRenderer, handle: GLMeshHandle, shader: Shader) void {
+        _ = shader; // Shader will be used when drawing
+        if (!self.gl_loaded) {
+            std.log.debug("GLRenderer.drawMesh (no-op, GL not loaded), handle: {d}", .{handle});
+            return;
+        }
+        std.log.debug("GLRenderer: Drawing mesh (placeholder) - Handle: {d}", .{handle});
+        // TODO: Actual OpenGL drawing:
+        // 1. shader.use() (done by caller or here)
+        // 2. Bind textures if any
+        // 3. gl.bindVertexArray(vao_for_handle)
+        // 4. gl.drawElements(gl.TRIANGLES, index_count_for_handle, gl.UNSIGNED_INT, null)
+        // 5. gl.bindVertexArray(0)
+    }
+
+    pub fn destroyMesh(self: *GLRenderer, handle: GLMeshHandle) void {
+         if (!self.gl_loaded) {
+            std.log.debug("GLRenderer.destroyMesh (no-op, GL not loaded), handle: {d}", .{handle});
+            return;
+        }
+        std.log.info("GLRenderer: Destroying mesh (placeholder) - Handle: {d}", .{handle});
+        // TODO: gl.deleteVertexArrays, gl.deleteBuffers (VBO, EBO)
+        _ = self;
+        _ = handle;
+    }
 };
 
 test "GLRenderer placeholder initialization with placeholder window" {

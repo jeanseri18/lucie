@@ -83,11 +83,17 @@ const AppWindow = struct {
     width: u32 = 0,
     height: u32 = 0,
     close_requested: bool = false,
+
+    // For placeholder simulation of auto-closing
+    current_poll_count: u32 = 0,
+    max_poll_count_before_close: u32 = 200, // Default, can be changed for tests
+
     // internal_glfw_window: ?*anyopaque = null, // Example if using GLFW
 
     pub fn init(allocator: std.mem.Allocator) AppWindow {
         return AppWindow {
             .allocator = allocator,
+            // Max polls can be configured after init if needed by tests
         };
     }
 
@@ -119,22 +125,21 @@ const AppWindow = struct {
     // Implementation of shouldClose
     fn appShouldClose(self: *const AppWindow) bool {
         // std.log.debug("AppWindow: shouldClose check (placeholder): {any}", .{self.close_requested});
-        // TODO: Actual check
-        // e.g., return glfwWindowShouldClose(self.internal_glfw_window);
-        return self.close_requested; // Simple placeholder logic
+        return self.close_requested;
     }
 
     // Implementation of pollEvents
     fn appPollEvents(self: *AppWindow) void {
-        _ = self;
-        // std.log.debug("AppWindow: Polling events (placeholder)", .{});
-        // TODO: Actual event polling
-        // e.g., glfwPollEvents();
-        // This is also where input handling would be triggered.
-        // For placeholder: simulate closing after some polls
-        // static var poll_count: u32 = 0;
-        // poll_count += 1;
-        // if (poll_count > 100) self.close_requested = true;
+        if (self.close_requested) return;
+
+        // std.log.debug("AppWindow: Polling events (placeholder, count: {d}/{d})", .{self.current_poll_count, self.max_poll_count_before_close});
+
+        self.current_poll_count += 1;
+        if (self.current_poll_count >= self.max_poll_count_before_close) {
+            std.log.info("AppWindow: Max poll count ({d}) reached, requesting close.", .{self.max_poll_count_before_close});
+            self.close_requested = true;
+        }
+        // In a real app, this would also dispatch events to an input manager, etc.
     }
 
     // Implementation of swapBuffers
