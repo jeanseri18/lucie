@@ -14,11 +14,34 @@ pub const GLShaderHandle = u32;
 pub const GLTextureHandle = u32;
 pub const GLBufferHandle = u32; // For VBO, EBO
 pub const GLVaoHandle = u32;
-pub const GLMeshHandle = u32; // Placeholder for mesh/VAO resource
+
+// GLMeshHandle will be an index/ID into a list of GLOwnedMesh objects
+pub const GLMeshHandle = u32;
+
+const GLOwnedMesh = struct {
+    vao: GLVaoHandle = 0,
+    vbo: GLBufferHandle = 0,
+    ebo: GLBufferHandle = 0,
+    index_count: u32 = 0,
+    // Other relevant data like vertex_count, material_id etc. could be stored here
+};
 
 pub const GLRenderer = struct {
     allocator: std.mem.Allocator,
-    next_mesh_handle: GLMeshHandle = 1, // Simple handle generation
+
+    // Store created GL mesh resources
+    // Using an ArrayList for dynamic storage. In a real engine, a more sophisticated
+    // resource manager or a fixed-size pool might be used for GLMeshHandle.
+    // For placeholder, a simple map from handle to GLOwnedMesh.
+    // Handles could be generational or simply map keys.
+    // Let's use an ArenaAllocator for GLOwnedMesh instances if we use pointers,
+    // or an ArrayList of GLOwnedMesh if handles are indices.
+    // For simplicity, using an IDH (ID Handle) map approach conceptually.
+    // next_mesh_handle will be the key.
+    // This is a simplified resource management for now.
+    meshes: std.AutoHashMap(GLMeshHandle, GLOwnedMesh),
+    next_mesh_handle: GLMeshHandle = 1,
+
     // window_handle: ?*anyopaque = null, // e.g. GLFWwindow pointer
 
     // Stats or capabilities
@@ -59,9 +82,12 @@ pub const GLRenderer = struct {
         }
 
 
+        var meshes_map = std.AutoHashMap(GLMeshHandle, GLOwnedMesh).init(allocator);
+
         var renderer = GLRenderer{
             .allocator = allocator,
             .gl_loaded = gl_is_loaded,
+            .meshes = meshes_map,
         };
 
         if (renderer.gl_loaded) {
@@ -92,9 +118,23 @@ pub const GLRenderer = struct {
 
     pub fn deinit(self: *GLRenderer) void {
         std.log.info("Deinitializing OpenGL Renderer...", .{});
-        // Clean up any global OpenGL resources if this renderer "owns" them.
+
+        // Destroy any remaining meshes
+        var mesh_iter = self.meshes.valueIterator();
+        while (mesh_iter.next()) |mesh_data| {
+            if (self.gl_loaded) {
+                // Assuming GLOwnedMesh stores actual GL handles
+                gl.deleteVertexArrays(1, &mesh_data.vao);
+                var buffers_to_delete = [_]GLBufferHandle{mesh_data.vbo, mesh_data.ebo};
+                gl.deleteBuffers(buffers_to_delete.len, &buffers_to_delete);
+                 std.log.debug("Deinit: Destroyed VAO: {d}, VBO: {d}, EBO: {d}", .{mesh_data.vao, mesh_data.vbo, mesh_data.ebo});
+            }
+        }
+        self.meshes.deinit(); // Deinitialize the hash map itself
+
+        // Clean up any other global OpenGL resources if this renderer "owns" them.
         // Usually, context destruction is handled by the windowing library.
-        _ = self;
+        std.log.info("OpenGL Renderer deinitialized.", .{});
     }
 
     pub fn beginFrame(self: *GLRenderer, clear_color: Color) void {
@@ -149,56 +189,133 @@ pub const GLRenderer = struct {
         self: *GLRenderer,
         vertices: []const Vertex,
         indices: []const u32
-    ) !GLMeshHandle {
+    ) !GLMeshHandle { // Can return error.OpenGLOperationFailed or map insertion error
+        const handle = self.next_mesh_handle;
+        self.next_mesh_handle += 1;
+
         if (!self.gl_loaded) {
-            std.log.debug("GLRenderer.createMesh (no-op, GL not loaded)", .{});
-            // Still return a dummy handle so app logic doesn't break
-            const handle = self.next_mesh_handle;
-            self.next_mesh_handle +=1;
+            std.log.warn("GLRenderer.createMesh (GL not loaded), returning dummy handle {d}", .{handle});
+            // Store a dummy mesh entry so destroyMesh doesn't try to access a non-existent key
+            // or make destroyMesh check for key existence.
+            // For now, we'll let destroyMesh handle missing keys gracefully if gl_loaded is false.
             return handle;
         }
-        std.log.info("GLRenderer: Creating mesh (placeholder) - Vertices: {d}, Indices: {d}", .{ vertices.len, indices.len });
-        // TODO: Actual OpenGL mesh creation:
-        // 1. gl.genVertexArrays(1, &vao)
-        // 2. gl.bindVertexArray(vao)
-        // 3. gl.genBuffers(1, &vbo)
-        // 4. gl.bindBuffer(gl.ARRAY_BUFFER, vbo)
-        // 5. gl.bufferData(gl.ARRAY_BUFFER, vertices_data, gl.STATIC_DRAW)
-        // 6. gl.genBuffers(1, &ebo)
-        // 7. gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ebo)
-        // 8. gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, indices_data, gl.STATIC_DRAW)
-        // 9. Setup vertex attributes (glVertexAttribPointer, glEnableVertexAttribArray) based on Vertex struct
-        // 10. gl.bindVertexArray(0) // Unbind VAO
-        // Store VBO, EBO, VAO, index_count in a struct associated with the returned handle.
-        const handle = self.next_mesh_handle;
-        self.next_mesh_handle +=1;
+
+        std.log.info("GLRenderer: Creating GL mesh - Vertices: {d}, Indices: {d}", .{ vertices.len, indices.len });
+
+        var vao: GLVaoHandle = 0;
+        var vbo: GLBufferHandle = 0;
+        var ebo: GLBufferHandle = 0;
+
+        // 1. Generate and bind VAO
+        gl.genVertexArrays(1, &vao);
+        if (vao == 0) { std.log.err("Failed to generate VAO", .{}); return error.OpenGLOperationFailed; }
+        gl.bindVertexArray(vao);
+
+        // 2. Generate, bind, and buffer VBO (Vertex Buffer Object)
+        gl.genBuffers(1, &vbo);
+        if (vbo == 0) { std.log.err("Failed to generate VBO", .{}); gl.deleteVertexArrays(1, &vao); return error.OpenGLOperationFailed; }
+        gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
+        gl.bufferData(gl.ARRAY_BUFFER, @sizeOf([]const Vertex) * vertices.len, @ptrCast(*const anyopaque, vertices.ptr), gl.STATIC_DRAW);
+
+        // 3. Generate, bind, and buffer EBO (Element Buffer Object)
+        if (indices.len > 0) {
+            gl.genBuffers(1, &ebo);
+            if (ebo == 0) {
+                std.log.err("Failed to generate EBO", .{});
+                gl.deleteBuffers(1, &vbo);
+                gl.deleteVertexArrays(1, &vao);
+                return error.OpenGLOperationFailed;
+            }
+            gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ebo);
+            gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, @sizeOf([]const u32) * indices.len, @ptrCast(*const anyopaque, indices.ptr), gl.STATIC_DRAW);
+        }
+
+        // 4. Setup vertex attributes for VertexPC (Position, Color)
+        // Position attribute
+        gl.vertexAttribPointer(0, 3, gl.FLOAT, gl.FALSE, @sizeOf(Vertex), @intToPtr(*const anyopaque, @offsetOf(Vertex, "position")));
+        gl.enableVertexAttribArray(0);
+        // Color attribute
+        gl.vertexAttribPointer(1, 4, gl.FLOAT, gl.FALSE, @sizeOf(Vertex), @intToPtr(*const anyopaque, @offsetOf(Vertex, "color")));
+        gl.enableVertexAttribArray(1);
+
+        // 5. Unbind VAO (good practice, prevents accidental modification)
+        gl.bindVertexArray(0);
+        // Unbind VBO and EBO after VAO is unbound (VAO remembers EBO binding)
+        gl.bindBuffer(gl.ARRAY_BUFFER, 0);
+        if (ebo != 0) {
+            gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, 0);
+        }
+
+
+        const owned_mesh = GLOwnedMesh {
+            .vao = vao,
+            .vbo = vbo,
+            .ebo = ebo,
+            .index_count = @intCast(u32, indices.len),
+        };
+
+        self.meshes.put(handle, owned_mesh) catch |err| {
+            std.log.err("Failed to store mesh data: {any}", .{err});
+            // Clean up already created GL objects if map insertion fails
+            gl.deleteVertexArrays(1, &vao);
+            var buffers_to_delete = [_]GLBufferHandle{vbo, ebo};
+            var num_buffers_to_delete: u32 = if (ebo == 0) 1 else 2;
+            gl.deleteBuffers(num_buffers_to_delete, &buffers_to_delete);
+            return err; // Propagate map error
+        };
+
+        std.log.info("GL Mesh created successfully. VAO: {d}, VBO: {d}, EBO: {d}, Handle: {d}", .{vao, vbo, ebo, handle});
         return handle;
     }
 
     pub fn drawMesh(self: *const GLRenderer, handle: GLMeshHandle, shader: Shader) void {
-        _ = shader; // Shader will be used when drawing
         if (!self.gl_loaded) {
             std.log.debug("GLRenderer.drawMesh (no-op, GL not loaded), handle: {d}", .{handle});
             return;
         }
-        std.log.debug("GLRenderer: Drawing mesh (placeholder) - Handle: {d}", .{handle});
-        // TODO: Actual OpenGL drawing:
-        // 1. shader.use() (done by caller or here)
-        // 2. Bind textures if any
-        // 3. gl.bindVertexArray(vao_for_handle)
-        // 4. gl.drawElements(gl.TRIANGLES, index_count_for_handle, gl.UNSIGNED_INT, null)
-        // 5. gl.bindVertexArray(0)
+
+        const mesh_data = self.meshes.get(handle) orelse {
+            std.log.warn("GLRenderer.drawMesh: Attempted to draw non-existent mesh handle {d}", .{handle});
+            return;
+        };
+
+        // Shader should be used by the caller before setting uniforms and drawing
+        // shader.use(self.gl_loaded); // Or ensure it's part of a material system
+
+        gl.bindVertexArray(mesh_data.vao);
+        if (mesh_data.index_count > 0) {
+            gl.drawElements(gl.TRIANGLES, mesh_data.index_count, gl.UNSIGNED_INT, null);
+        } else {
+            // This assumes non-indexed drawing if index_count is 0.
+            // Need vertex_count in GLOwnedMesh for this. For now, only indexed.
+            std.log.warn("GLRenderer.drawMesh: Mesh handle {d} has 0 indices, cannot draw.", .{handle});
+        }
+        gl.bindVertexArray(0); // Unbind VAO
     }
 
     pub fn destroyMesh(self: *GLRenderer, handle: GLMeshHandle) void {
-         if (!self.gl_loaded) {
+        if (!self.gl_loaded) {
             std.log.debug("GLRenderer.destroyMesh (no-op, GL not loaded), handle: {d}", .{handle});
             return;
         }
-        std.log.info("GLRenderer: Destroying mesh (placeholder) - Handle: {d}", .{handle});
-        // TODO: gl.deleteVertexArrays, gl.deleteBuffers (VBO, EBO)
-        _ = self;
-        _ = handle;
+
+        if (self.meshes.fetchRemove(handle)) |removed_mesh_entry| {
+            const mesh_data = removed_mesh_entry.value;
+            std.log.info("GLRenderer: Destroying GL Mesh - Handle: {d}, VAO: {d}, VBO: {d}, EBO: {d}", .{
+                handle, mesh_data.vao, mesh_data.vbo, mesh_data.ebo
+            });
+            gl.deleteVertexArrays(1, &mesh_data.vao);
+            var buffers_to_delete: [2]GLBufferHandle = .{ mesh_data.vbo, 0 };
+            var num_buffers_to_delete: u32 = 1;
+            if (mesh_data.ebo != 0) {
+                buffers_to_delete[1] = mesh_data.ebo;
+                num_buffers_to_delete = 2;
+            }
+            gl.deleteBuffers(num_buffers_to_delete, &buffers_to_delete[0]);
+        } else {
+            std.log.warn("GLRenderer.destroyMesh: Attempted to destroy non-existent mesh handle {d}", .{handle});
+        }
     }
 };
 

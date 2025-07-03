@@ -20,6 +20,8 @@ pub const Quat = @import("math/quat.zig").Quat;
 pub const Shader = @import("graphics/shader.zig").Shader;
 pub const VertexPC = @import("graphics/vertex.zig").VertexPC;
 pub const VertexPNCU = @import("graphics/vertex.zig").VertexPNCU;
+pub const Camera = @import("graphics/camera.zig").Camera;
+pub const ProjectionType = @import("graphics/camera.zig").ProjectionType;
 // Could also do: pub const vertex = @import("graphics/vertex.zig"); to export all from there.
 
 // ... and so on for other modules

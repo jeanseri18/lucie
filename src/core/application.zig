@@ -2,6 +2,7 @@
 // Application wrapper - manages the engine and windowing.
 
 const std = @import("std");
+const math = std.math; // Added for sin/cos
 const Engine = @import("engine.zig").Engine; // Assuming engine.zig is in the same directory
 
 pub const Application = struct {
@@ -124,6 +125,12 @@ pub const Application = struct {
         );
         defer renderer.deinit();
 
+        // Initialize Camera
+        var camera = @import("../graphics/camera.zig").Camera.initDefault(self.allocator);
+        camera.position = .{ .x = 0, .y = 0.5, .z = 3.0 }; // Slightly different starting pos
+
+        var total_time: f32 = 0.0; // For simple animation
+
         // Main loop
         while (!window.shouldClose() and self.isRunning()) { // Check both app state and window state
             // Poll events
@@ -168,9 +175,30 @@ pub const Application = struct {
             }
 
             if (self.engine.triangle_mesh != 0 and self.engine.triangle_shader != null) {
-                self.engine.triangle_shader.?.use(); // Use the shader
-                // TODO: Set uniforms on shader (e.g., model, view, projection matrices)
-                renderer.drawMesh(self.engine.triangle_mesh, self.engine.triangle_shader.?);
+                const shader = self.engine.triangle_shader.?;
+                shader.use(renderer.gl_loaded); // Use the shader
+
+                // Update camera aspect ratio based on window size
+                camera.aspect_ratio = @intToFloat(f32, window_size.width) / @intToFloat(f32, window_size.height);
+
+                // Simple camera animation: orbit around origin
+                total_time += 0.016; // assume ~60 FPS for dt
+                camera.position.x = math.sin(total_time) * 3.0;
+                camera.position.z = math.cos(total_time) * 3.0;
+                camera.lookAt( .{ .x=0,.y=0,.z=0}, .{ .x=0,.y=1,.z=0});
+
+
+                const view_matrix = camera.getViewMatrix();
+                const proj_matrix = camera.getProjectionMatrix();
+
+                // Model matrix (identity for now, placing triangle at origin)
+                const model_matrix = @import("../math/mat4.zig").Mat4.identity();
+
+                shader.setUniformMat4(renderer.gl_loaded, "u_model", &model_matrix);
+                shader.setUniformMat4(renderer.gl_loaded, "u_view", &view_matrix);
+                shader.setUniformMat4(renderer.gl_loaded, "u_projection", &proj_matrix);
+
+                renderer.drawMesh(self.engine.triangle_mesh, shader);
             }
 
             renderer.endFrame();

@@ -1,287 +1,260 @@
 // src/graphics/camera.zig
-// Camera system (2D and/or 3D).
-
 const std = @import("std");
-const Mat4 = @import("../math/mat4.zig").Mat4;
-const Vec2 = @import("../math/vec2.zig").Vec2;
+const math = std.math;
 const Vec3 = @import("../math/vec3.zig").Vec3;
+const Mat4 = @import("../math/mat4.zig").Mat4;
+const Quat = @import("../math/quat.zig").Quat;
 
-pub const CameraProjectionType = enum {
-    Orthographic,
+// Forward declaration for Quat.fromLookRotation if it's to be part of Quat's API
+// For now, defining it as a static function in this file for Camera's use.
+fn quatFromLookRotation(forward_normalized: Vec3, up_normalized: Vec3) Quat;
+
+pub const ProjectionType = enum {
     Perspective,
+    Orthographic,
 };
 
 pub const Camera = struct {
-    projection_type: CameraProjectionType = .Orthographic,
+    allocator: std.mem.Allocator,
 
-    position: Vec3 = Vec3.zero(),
-    rotation: Vec3 = Vec3.zero(), // Euler angles (pitch, yaw, roll) or use Quaternion
-    // orientation: Quaternion = Quaternion.identity(), // Alternative to Euler for rotation
+    position: Vec3 = Vec3.zero,
+    orientation: Quat = Quat.identity,
 
-    // For Perspective projection
-    fov_y_degrees: f32 = 70.0, // Field of view in Y direction, in degrees
-    aspect_ratio: f32 = 16.0 / 9.0, // Width / Height
-    near_plane: f32 = 0.1,
-    far_plane: f32 = 1000.0,
+    projection_type: ProjectionType = .Perspective,
+    fov_y_rad: f32 = math.degreesToRadians(f32, 60.0),
+    aspect_ratio: f32 = 16.0 / 9.0,
+    z_near: f32 = 0.1,
+    z_far: f32 = 100.0,
+    ortho_size: f32 = 10.0,
 
-    // For Orthographic projection
-    ortho_size: f32 = 10.0, // Represents half height (e.g. 10 units from center to top)
-    // ortho_left, ortho_right, ortho_bottom, ortho_top can also be used for more control.
-
-    // Cached matrices
-    view_matrix: Mat4 = Mat4.identity(),
-    projection_matrix: Mat4 = Mat4.identity(),
-    view_projection_matrix: Mat4 = Mat4.identity(),
-
-    is_dirty: bool = true, // Flag to recompute matrices when properties change
-
-    pub fn initPerspective(
-        pos: Vec3,
-        fov_y_deg: f32,
-        aspect: f32,
-        near_p: f32,
-        far_p: f32,
-    ) Camera {
-        var cam = Camera{
-            .projection_type = .Perspective,
+    pub fn init(allocator: std.mem.Allocator, pos: Vec3, target: Vec3, world_up: Vec3) Camera {
+        var cam = Camera {
+            .allocator = allocator,
             .position = pos,
-            .fov_y_degrees = fov_y_deg,
-            .aspect_ratio = aspect,
-            .near_plane = near_p,
-            .far_plane = far_p,
+            .orientation = Quat.identity, // Placeholder, lookAt will set it
         };
-        cam.recalculateMatrices();
+        cam.lookAt(target, world_up);
         return cam;
     }
 
-    pub fn initOrthographic(
-        pos: Vec3,
-        size: f32, // Half height of the view area
-        aspect: f32,
-        near_p: f32, // Typically -1 or small negative for 2D
-        far_p: f32,  // Typically 1 or small positive for 2D
-    ) Camera {
-        var cam = Camera{
-            .projection_type = .Orthographic,
-            .position = pos,
-            .ortho_size = size,
-            .aspect_ratio = aspect,
-            .near_plane = near_p, // Ortho near/far define the depth range
-            .far_plane = far_p,
-        };
-        cam.recalculateMatrices();
-        return cam;
+    pub fn initDefault(allocator: std.mem.Allocator) Camera {
+        // Default: looking at origin from +Z, world Y is up.
+        return Camera.init(allocator, Vec3.init(0,0,3), Vec3.zero, Vec3.up);
     }
 
-    // Call this when camera properties (position, rotation, fov, etc.) change
-    pub fn setDirty(self: *Camera) void {
-        self.is_dirty = true;
+    pub fn getViewMatrix(self: *const Camera) Mat4 {
+        // View matrix is Inverse(CameraWorldTransform)
+        // CameraWorldTransform = Translate(position) * Rotate(orientation)
+        // Inverse(Translate*Rotate) = Inverse(Rotate) * Inverse(Translate)
+        // = Rotate(conjugate(orientation)) * Translate(-position)
+        const rot_inv = self.orientation.conjugate().toMat4();
+        const transl_inv = Mat4.translation(self.position.negate());
+        return rot_inv.mul(transl_inv);
     }
 
-    pub fn update(self: *Camera) void {
-        if (self.is_dirty) {
-            self.recalculateMatrices();
-            self.is_dirty = false;
-        }
-    }
-
-    fn recalculateMatrices(self: *Camera) void {
-        // Recalculate View Matrix
-        // This is a simplified view matrix calculation.
-        // A full implementation would use lookAt or build from rotation (quaternion or Euler).
-        // Assuming a simple FPS-style camera for now (yaw and pitch only, no roll).
-        const pitch = self.rotation.x; // Rotation around X-axis
-        const yaw = self.rotation.y;   // Rotation around Y-axis
-
-        // Direction vectors
-        var front: Vec3 = undefined;
-        front.x = std.math.cos(yaw) * std.math.cos(pitch);
-        front.y = std.math.sin(pitch);
-        front.z = std.math.sin(yaw) * std.math.cos(pitch);
-        front = front.normalize();
-
-        // For a simple lookAt, if we define a target point:
-        // const target = self.position.add(front);
-        // self.view_matrix = Mat4.lookAt(self.position, target, Vec3.up());
-        // Or, build the view matrix manually (inverse of camera's world transform)
-        // For now, let's use a simplified translation and rotation.
-        // This is a common simplification for 2D or basic 3D view matrices.
-        // More robust: Mat4.translation(self.position.negate()).mul(Mat4.fromEulerAngles(-self.rotation.x, -self.rotation.y, -self.rotation.z));
-        // Or using lookAt properly is better for 3D.
-        // For a 2D orthographic camera, view matrix is often just translation:
-        if (self.projection_type == .Orthographic) {
-             // For 2D, position.z might control layering if near/far are wide enough.
-             // Typically, a 2D camera's view matrix inverts its X and Y position.
-            self.view_matrix = Mat4.translation(Vec3.new(-self.position.x, -self.position.y, -self.position.z));
-            // If rotation is needed for a 2D camera (e.g. top-down rotated view):
-            // self.view_matrix = Mat4.rotationZ(-self.rotation.z).mul(Mat4.translation(Vec3.new(-self.position.x, -self.position.y, 0)));
-        } else { // Perspective
-            // Using a proper lookAt for 3D perspective:
-            const world_up = Vec3.up();
-            const cam_right = world_up.cross(front).normalize();
-            const cam_up = front.cross(cam_right).normalize(); // Recalculate up vector to be orthogonal
-            self.view_matrix = Mat4.lookAtRh(self.position, self.position.add(front), cam_up);
-        }
-
-
-        // Recalculate Projection Matrix
+    pub fn getProjectionMatrix(self: *const Camera) Mat4 {
         switch (self.projection_type) {
+            .Perspective => return Mat4.perspective(self.fov_y_rad, self.aspect_ratio, self.z_near, self.z_far),
             .Orthographic => {
-                const half_width = self.ortho_size * self.aspect_ratio;
-                const half_height = self.ortho_size;
-                self.projection_matrix = Mat4.orthoRhZo(
-                    -half_width, half_width,    // left, right
-                    -half_height, half_height,  // bottom, top
-                    self.near_plane, self.far_plane,
-                );
-                // Common alternative for pixel-perfect 2D (origin top-left):
-                // Mat4.ortho(0, screen_width, screen_height, 0, self.near_plane, self.far_plane);
-            },
-            .Perspective => {
-                self.projection_matrix = Mat4.perspectiveRhZo(
-                    std.math.degreesToRadians(self.fov_y_degrees),
-                    self.aspect_ratio,
-                    self.near_plane,
-                    self.far_plane,
-                );
+                const half_h = self.ortho_size / 2.0;
+                const half_w = half_h * self.aspect_ratio;
+                return Mat4.orthographic(-half_w, half_w, -half_h, half_h, self.z_near, self.z_far);
             },
         }
-
-        self.view_projection_matrix = self.projection_matrix.mul(self.view_matrix);
     }
 
-    pub fn getViewMatrix(self: *Camera) Mat4 {
-        if (self.is_dirty) self.update();
-        return self.view_matrix;
+    pub fn lookAt(self: *Camera, target: Vec3, world_up_hint: Vec3) void {
+        // Camera's forward direction (-Z local) points towards target from eye.
+        const forward_local_z = self.position.sub(target).normalized(); // This is +Z local if -Z view is target
+        // If target is (0,0,0) and pos is (0,0,5), then forward_local_z is (0,0,1)
+        // This means the camera's +Z axis in world space is (0,0,1).
+        // The quatFromLookRotation expects the "forward" direction of the object itself.
+        // If our camera's "forward" is its -Z axis, then we pass that.
+        const cam_forward_world = target.sub(self.position).normalized(); // Direction camera is looking
+        self.orientation = quatFromLookRotation(cam_forward_world, world_up_hint);
     }
 
-    pub fn getProjectionMatrix(self: *Camera) Mat4 {
-        if (self.is_dirty) self.update();
-        return self.projection_matrix;
+    // Moves camera along its local axes (relative to its orientation)
+    pub fn moveLocal(self: *Camera, delta_local: Vec3) void {
+        // Rotate delta_local by camera's orientation to get world-space delta
+        const delta_world = self.orientation.mulVec3(delta_local);
+        self.position = self.position.add(delta_world);
     }
 
-    pub fn getViewProjectionMatrix(self: *Camera) Mat4 {
-        if (self.is_dirty) self.update();
-        return self.view_projection_matrix;
+    // Moves camera along world axes
+    pub fn moveWorld(self: *Camera, delta_world: Vec3) void {
+        self.position = self.position.add(delta_world);
     }
 
-    // Movement examples (would typically be in a CameraController or game logic)
-    pub fn moveForward(self: *Camera, amount: f32) void {
-        // This requires calculating the camera's forward vector based on rotation
-        // For simplicity, if just moving along world axes: self.position.z -= amount;
-        // Proper forward based on yaw/pitch:
-        const pitch = self.rotation.x;
-        const yaw = self.rotation.y;
-        var direction: Vec3 = undefined;
-        direction.x = std.math.cos(yaw) * std.math.cos(pitch);
-        direction.y = std.math.sin(pitch); // If you want to move "up/down" with pitch
-        // direction.y = 0; // If you want to move only on XZ plane based on yaw
-        direction.z = std.math.sin(yaw) * std.math.cos(pitch);
-        self.position = self.position.add(direction.scale(amount));
-        self.setDirty();
-    }
-    pub fn moveRight(self: *Camera, amount: f32) void {
-        // Requires calculating camera's right vector
-        const pitch = self.rotation.x;
-        const yaw = self.rotation.y;
-        var forward: Vec3 = .{
-            .x = std.math.cos(yaw) * std.math.cos(pitch),
-            .y = std.math.sin(pitch),
-            .z = std.math.sin(yaw) * std.math.cos(pitch),
-        };
-        const right = forward.cross(Vec3.up()).normalize(); // Assuming world up is (0,1,0)
-        self.position = self.position.add(right.scale(amount));
-        self.setDirty();
-    }
-    pub fn moveUp(self: *Camera, amount: f32) void {
-        self.position.y += amount; // Moves along world Y axis
-        // If you want to move along camera's local up:
-        // const pitch = self.rotation.x;
-        // const yaw = self.rotation.y;
-        // var forward: Vec3 = .{ .x = std.math.cos(yaw) * std.math.cos(pitch), .y = std.math.sin(pitch), .z = std.math.sin(yaw) * std.math.cos(pitch) };
-        // const right = forward.cross(Vec3.up()).normalize();
-        // const local_up = right.cross(forward).normalize();
-        // self.position = self.position.add(local_up.scale(amount));
-        self.setDirty();
+    // FPS-style rotation: pitch around local X, yaw around world Y.
+    pub fn rotateFps(self: *Camera, pitch_rad: f32, yaw_rad: f32) void {
+        // Yaw around world UP vector
+        const yaw_quat = Quat.fromAxisAngle(Vec3.up, yaw_rad);
+        self.orientation = yaw_quat.mul(self.orientation); // Pre-multiply for world axis rotation
+
+        // Pitch around local RIGHT vector
+        // Local right is (1,0,0) rotated by current orientation
+        const local_right = self.orientation.mulVec3(Vec3.right);
+        const pitch_quat = Quat.fromAxisAngle(local_right, pitch_rad);
+        self.orientation = self.orientation.mul(pitch_quat); // Post-multiply for local axis rotation
+
+        self.orientation = self.orientation.normalized(); // Normalize after combined rotations
     }
 
-    pub fn rotate(self: *Camera, pitch_delta_deg: f32, yaw_delta_deg: f32) void {
-        self.rotation.x += std.math.degreesToRadians(pitch_delta_deg);
-        self.rotation.y += std.math.degreesToRadians(yaw_delta_deg);
-        // Clamp pitch to avoid gimbal lock issues or flipping upside down
-        const max_pitch = std.math.pi / 2.0 - 0.01; // Just under 90 degrees
-        self.rotation.x = std.math.clamp(self.rotation.x, -max_pitch, max_pitch);
-        self.setDirty();
-    }
-
+    pub fn forward(self: *const Camera) Vec3 { return self.orientation.mulVec3(Vec3.forward); } // (0,0,-1) local
+    pub fn right(self: *const Camera) Vec3 { return self.orientation.mulVec3(Vec3.right); }   // (1,0,0) local
+    pub fn up(self: *const Camera) Vec3 { return self.orientation.mulVec3(Vec3.up); }       // (0,1,0) local
 };
 
-test "Camera initialization and matrix calculation" {
-    // Perspective Camera
-    var p_cam = Camera.initPerspective(Vec3.new(0,0,3), 70.0, 16.0/9.0, 0.1, 100.0);
-    p_cam.update(); // Initial update
+// Helper to create a quaternion that rotates to look in a specific direction.
+// `forward_normalized`: The world-space direction the local +Z axis should point to.
+// `up_hint_normalized`: A world-space "up" vector, used to establish roll.
+// This function constructs a rotation that aligns local +Z with `forward_normalized`
+// and local +Y as close as possible to `up_hint_normalized`.
+fn quatFromLookRotation(forward_normalized: Vec3, up_hint_normalized: Vec3) Quat {
+    const z_axis = forward_normalized; // Local +Z will align with this world direction
 
-    try std.testing.expect(p_cam.projection_type == .Perspective);
-    // Basic check: view matrix should reflect camera position (e.g. translate by -pos.z in m[14])
-    // This depends heavily on the Mat4.lookAt implementation.
-    // For a camera at (0,0,3) looking at (0,0,0) with up (0,1,0),
-    // the view matrix should translate Z by -3.
-    // Mat4 stores in column-major order typically. view_matrix.m[14] is Z translation.
-    // If Mat4.lookAtRh correctly implemented:
-    // For position (0,0,3), target (0,0,0), up (0,1,0)
-    // zaxis = (pos - target).norm() = (0,0,1)
-    // xaxis = up.cross(zaxis).norm() = (1,0,0)
-    // yaxis = zaxis.cross(xaxis).norm() = (0,1,0)
-    // view matrix:
-    // xaxis.x, yaxis.x, zaxis.x, 0
-    // xaxis.y, yaxis.y, zaxis.y, 0
-    // xaxis.z, yaxis.z, zaxis.z, 0
-    // -dot(xaxis,pos), -dot(yaxis,pos), -dot(zaxis,pos), 1
-    // So, m[12] = 0, m[13] = 0, m[14] = -3
-    try std.testing.expect(p_cam.view_matrix.m[14] == -3.0); // Check Z translation part
+    var x_axis = up_hint_normalized.cross(z_axis);
+    if (x_axis.lengthSquared() < 0.00001) { // up_hint and z_axis are collinear
+        // If z_axis is (0,1,0) or (0,-1,0), cross with (1,0,0) to get a valid x_axis
+        if (math.fabs(z_axis.y) > 0.9999) {
+            x_axis = Vec3.right.cross(z_axis);
+        } else { // Otherwise, cross with (0,1,0) to get a valid x_axis
+            x_axis = Vec3.up.cross(z_axis);
+        }
+    }
+    x_axis = x_axis.normalized();
 
-    // Orthographic Camera
-    var o_cam = Camera.initOrthographic(Vec3.new(10,20,0), 100.0, 800.0/600.0, -1.0, 1.0);
-    o_cam.update();
-    try std.testing.expect(o_cam.projection_type == .Orthographic);
-    // View matrix for ortho is simpler: translates by -pos
-    try std.testing.expect(o_cam.view_matrix.m[12] == -10.0); // Check X translation
-    try std.testing.expect(o_cam.view_matrix.m[13] == -20.0); // Check Y translation
+    const y_axis = z_axis.cross(x_axis).normalized(); // Recalculate Y to ensure orthogonality
 
-    // Test dirty flag and update
-    o_cam.position.x = 50.0;
-    o_cam.setDirty();
-    try std.testing.expect(o_cam.is_dirty);
-    _ = o_cam.getViewProjectionMatrix(); // This should trigger update
-    try std.testing.expect(!o_cam.is_dirty);
-    try std.testing.expect(o_cam.view_matrix.m[12] == -50.0);
+    // Now we have an orthonormal basis [x_axis, y_axis, z_axis] for the target orientation.
+    // Convert this rotation basis to a quaternion.
+    // This matrix M = [x_axis | y_axis | z_axis] rotates from basis vectors to world.
+    // Standard algorithm for matrix to quaternion:
+    const m00 = x_axis.x; const m01 = y_axis.x; const m02 = z_axis.x;
+    const m10 = x_axis.y; const m11 = y_axis.y; const m12 = z_axis.y;
+    const m20 = x_axis.z; const m21 = y_axis.z; const m22 = z_axis.z;
 
-    std.log.info("Camera test completed.", .{});
+    const trace = m00 + m11 + m22;
+    var qx:f32 = 0; var qy:f32 = 0; var qz:f32 = 0; var qw:f32 = 0;
+
+    if (trace > 0.0) {
+        var s = math.sqrt(trace + 1.0) * 2.0;
+        qw = 0.25 * s;
+        s = 1.0 / s;
+        qx = (m21 - m12) * s;
+        qy = (m02 - m20) * s;
+        qz = (m10 - m01) * s;
+    } else if ((m00 > m11) and (m00 > m22)) {
+        var s = math.sqrt(1.0 + m00 - m11 - m22) * 2.0;
+        qx = 0.25 * s;
+        s = 1.0 / s;
+        qw = (m21 - m12) * s;
+        qy = (m01 + m10) * s;
+        qz = (m02 + m20) * s;
+    } else if (m11 > m22) {
+        var s = math.sqrt(1.0 + m11 - m00 - m22) * 2.0;
+        qy = 0.25 * s;
+        s = 1.0 / s;
+        qw = (m02 - m20) * s;
+        qx = (m01 + m10) * s;
+        qz = (m12 + m21) * s;
+    } else {
+        var s = math.sqrt(1.0 + m22 - m00 - m11) * 2.0;
+        qz = 0.25 * s;
+        s = 1.0 / s;
+        qw = (m10 - m01) * s;
+        qx = (m02 + m20) * s;
+        qy = (m12 + m21) * s;
+    }
+    // The quaternion q=(qx,qy,qz,qw) rotates from identity to the new orientation.
+    // If our Camera orientation means "rotation from world to camera's standard orientation (-Z fwd)",
+    // then this calculated quat is correct.
+    // If Camera orientation means "rotation from camera's standard to world", then we need conjugate.
+    // Standard for storing object orientation is world_from_local. So this q is correct.
+    return Quat.init(qx, qy, qz, qw).normalized();
+}
+
+
+test "Camera initialization and default values" {
+    const allocator = std.testing.allocator;
+    var cam = Camera.initDefault(allocator); // pos(0,0,3), target(0,0,0), up(0,1,0)
+
+    // Default init looks at (0,0,0) from (0,0,3) with up (0,1,0).
+    // Camera's forward direction (local -Z) should point along world -Z.
+    // So, cam.forward() which is orientation * (0,0,-1) should be (0,0,-1).
+    // This means orientation must be identity.
+    try std.testing.expect(cam.position.equals(Vec3.init(0,0,3), 0.001));
+    try std.testing.expect(cam.orientation.equals(Quat.identity, 0.001));
+    try std.testing.expect(cam.forward().equals(Vec3.init(0,0,-1), 0.001));
+}
+
+test "Camera view matrix" {
+    const allocator = std.testing.allocator;
+    var cam = Camera.init(allocator, Vec3.init(0,0,5), Vec3.zero, Vec3.up);
+    const view_mat = cam.getViewMatrix();
+    const expected_view_mat = Mat4.lookAt(Vec3.init(0,0,5), Vec3.zero, Vec3.up);
+    try std.testing.expect(view_mat.equals(expected_view_mat, 0.0001));
+
+    // Test with a different orientation
+    // Cam at origin, looking along +X, world Y is up.
+    // Forward is (1,0,0). Up hint (0,1,0).
+    cam.position = Vec3.zero;
+    cam.lookAt(Vec3.init(1,0,0), Vec3.up);
+
+    const view_mat2 = cam.getViewMatrix();
+    const expected_view_mat2 = Mat4.lookAt(Vec3.zero, Vec3.init(1,0,0), Vec3.up);
+    try std.testing.expect(view_mat2.equals(expected_view_mat2, 0.0001));
+}
+
+test "Camera projection matrix" {
+    const allocator = std.testing.allocator;
+    var cam = Camera.initDefault(allocator);
+    cam.aspect_ratio = 16.0/9.0;
+    cam.fov_y_rad = math.degreesToRadians(f32, 90.0);
+    cam.z_near = 0.1;
+    cam.z_far = 100.0;
+
+    const proj_mat_p = cam.getProjectionMatrix();
+    const expected_proj_p = Mat4.perspective(cam.fov_y_rad, cam.aspect_ratio, cam.z_near, cam.z_far);
+    try std.testing.expect(proj_mat_p.equals(expected_proj_p, 0.0001));
+
+    cam.projection_type = .Orthographic;
+    cam.ortho_size = 10.0;
+    const proj_mat_o = cam.getProjectionMatrix();
+    const half_h = cam.ortho_size / 2.0;
+    const half_w = half_h * cam.aspect_ratio;
+    const expected_proj_o = Mat4.orthographic(-half_w, half_w, -half_h, half_h, cam.z_near, cam.z_far);
+    try std.testing.expect(proj_mat_o.equals(expected_proj_o, 0.0001));
 }
 
 test "Camera movement and rotation" {
-    var cam = Camera.initPerspective(Vec3.zero(), 70.0, 1.0, 0.1, 100.0);
+    const allocator = std.testing.allocator;
+    var cam = Camera.initDefault(allocator); // (0,0,3) looking at (0,0,0), orientation=identity
 
-    cam.moveForward(10.0); // Moves along -Z if default rotation is (0,0,0) looking down -Z
-    // Default front vector from recalculateMatrices with (0,0,0) rotation is (1,0,0) (cos(0)cos(0), sin(0), sin(0)cos(0))
-    // This is not looking down -Z. A typical setup would have yaw = -PI/2 or PI/2 to look along Z.
-    // Let's adjust initial rotation or test based on current forward.
-    // If yaw is 0, forward is +X. So moveForward(10) moves to (10,0,0).
-    // Let's assume a default orientation or test rotation first.
+    // Move local forward (-Z) by 1 unit. Cam forward is (0,0,-1).
+    cam.moveLocal(Vec3.init(0,0,-1));
+    try std.testing.expect(cam.position.equals(Vec3.init(0,0,2), 0.0001)); // (0,0,3) + (0,0,-1) = (0,0,2)
 
-    cam.rotate(0, 90); // Rotate 90 degrees yaw (around Y)
-    cam.update();
-    // After 90 deg yaw (PI/2), forward should be along world +Z (cos(PI/2)=0, sin(PI/2)=1 => (0,0,1))
-    // So moving forward by 10 should change Z by 10.
-    const initial_pos_z = cam.position.z;
-    cam.moveForward(10.0);
-    cam.update();
-    try std.testing.expect(std.math.approxEqAbs(cam.position.z, initial_pos_z + 10.0, 0.001));
+    // Rotate FPS style: yaw by 90 deg (pi/2) around world Y.
+    cam.rotateFps(0, math.pi / 2.0);
+    // Cam's local -Z (forward) should now point along world -X.
+    // Cam's local +X (right) should now point along world +Z.
+    try std.testing.expect(cam.forward().equals(Vec3.init(-1,0,0), 0.001));
+    try std.testing.expect(cam.right().equals(Vec3.init(0,0,1), 0.001)); // Corrected: right is (0,0,1) not (0,0,-1)
+                                                                      // because if fwd is -X, and up is Y, then right = up x fwd = Y x (-X) = +Z
 
-    const initial_pos_x = cam.position.x;
-    cam.moveRight(5.0); // Right vector should be -X after 90 deg yaw
-    cam.update();
-    try std.testing.expect(std.math.approxEqAbs(cam.position.x, initial_pos_x - 5.0, 0.001));
+    // Move local forward (-Z) by 1 unit. Current forward is (-1,0,0).
+    cam.moveLocal(Vec3.init(0,0,-1)); // Moves by (-1,0,0) in world
+    try std.testing.expect(cam.position.equals(Vec3.init(-1,0,2), 0.001)); // (0,0,2) + (-1,0,0) = (-1,0,2)
 
-    std.log.info("Camera movement/rotation test completed.", .{});
+    // Move local right (+X) by 1 unit. Current right is (0,0,1).
+    cam.moveLocal(Vec3.init(1,0,0)); // Moves by (0,0,1) in world
+    try std.testing.expect(cam.position.equals(Vec3.init(-1,0,3), 0.001)); // (-1,0,2) + (0,0,1) = (-1,0,3)
+
+    // Pitch up (around local right) by -pi/2 (look upwards)
+    // Current local right is (0,0,1).
+    cam.rotateFps(-math.pi/2.0, 0);
+    // Forward was (-1,0,0). After pitching up around (0,0,1) by -90deg, forward should be (0,1,0) (world up)
+    try std.testing.expect(cam.forward().equals(Vec3.init(0,1,0), 0.001));
 }
